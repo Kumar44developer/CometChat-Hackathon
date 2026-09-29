@@ -1,0 +1,17 @@
+{
+  "name": "mentorroom-bot",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "MentorRoom AI mentor — a real CometChat user (mentor_bot) with presence, typing, LLM replies and session recaps.",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@cometchat/chat-sdk-javascript": "^4.1.9",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jsdom": "^25.0.1",
+    "ws": "^8.18.0"
+  }
+}

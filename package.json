@@ -1,0 +1,20 @@
+{
+  "name": "mentorroom",
+  "private": true,
+  "version": "1.0.0",
+  "description": "MentorRoom - multi-tenant topic study rooms with a real CometChat AI mentor (presence, typing, moderation, recaps).",
+  "workspaces": [
+    "web",
+    "bot"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace web",
+    "dev:bot": "npm run start --workspace bot",
+    "build": "npm run build --workspace web",
+    "preview": "npm run preview --workspace web",
+    "provision": "node scripts/provision.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

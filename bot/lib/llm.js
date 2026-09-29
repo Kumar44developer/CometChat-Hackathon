@@ -1,0 +1,304 @@
+// Provider-agnostic LLM call using Node's global fetch (Node 18+).
+// Supports: openai | anthropic | gemini | ollama. If none is configured,
+// returns a helpful fallback so the mentor still replies (typing + real
+// message keep the demo working end to end with zero external keys).
+
+const SYSTEM_PROMPT = `You are "Mentor AI", a friendly, precise study-group mentor inside a CometChat topic room.
+Rules:
+- Keep answers SHORT (2-5 sentences or a few bullets). This is a chat, not an essay.
+- Be encouraging and concrete. Use examples when helpful.
+- If the question is off-topic or unclear, ask one clarifying question.
+- Never mention that you are an AI language model; you are the room's mentor.`;
+
+export function llmConfigured() {
+  const p = (process.env.LLM_PROVIDER || "none").toLowerCase();
+  if (p === "none") return false;
+  if (p === "ollama") return true;
+  return Boolean(process.env.LLM_API_KEY);
+}
+
+// Small-model toxicity classifier for the /moderate endpoint. Uses Groq's
+// moderation-tuned gpt-oss-safeguard model (verdicts in ~0.2s) and fails
+// OPEN on any error/timeout — moderation must never break the chat demo.
+export async function classifyToxicity(text) {
+  // Groq occasionally returns an empty/truncated verdict; one quick retry
+  // keeps the classifier reliable without adding latency to clean messages.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const out = await classifyToxicityOnce(text);
+    if (out.verdict !== "unclear") return { flagged: out.verdict === "unsafe", reason: out.reason, score: out.verdict === "unsafe" ? 1 : 0 };
+  }
+  return { flagged: false }; // still unclear after retry -> fail open
+}
+
+async function classifyToxicityOnce(text) {
+  const provider = (process.env.LLM_PROVIDER || "none").toLowerCase();
+  if (!["groq", "openai"].includes(provider) || !process.env.LLM_API_KEY) {
+    return { verdict: "unclear" };
+  }
+  const base =
+    process.env.LLM_BASE_URL ||
+    (provider === "groq" ? "https://api.groq.com/openai/v1" : "https://api.openai.com/v1");
+  const model =
+    process.env.LLM_TOXICITY_MODEL ||
+    (provider === "groq" ? "openai/gpt-oss-safeguard-20b" : "omni-moderation-latest");
+  try {
+    const res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${process.env.LLM_API_KEY}`,
+      },
+      signal: AbortSignal.timeout(4000),
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        // safeguard thinks in reasoning tokens first — budget must cover them.
+        max_tokens: 512,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a content moderator for a student study chat. Classify the user message for insults, harassment, hate or self-harm directed at people. Respond in exactly this format on line one: VERDICT: SAFE or VERDICT: UNSAFE. Optionally add line two: REASON: <one or two words>.",
+          },
+          { role: "user", content: text },
+        ],
+      }),
+    });
+    const data = await res.json();
+    if (data?.error) return { verdict: "unclear" };
+    const content = (data?.choices?.[0]?.message?.content || "").toUpperCase();
+    if (/VERDICT:\s*UNSAFE|\bUNSAFE\b/.test(content)) {
+      const m = content.match(/REASON:\s*([^\n]+)/);
+      const reason = m ? m[1].trim().toLowerCase().replace(/_/g, " ") : "hostile content";
+      return { verdict: "unsafe", reason: `Flagged by AI moderator (${reason})` };
+    }
+    if (/VERDICT:\s*SAFE|\bSAFE\b/.test(content)) return { verdict: "safe" };
+    return { verdict: "unclear" }; // empty/truncated -> caller retries
+  } catch {
+    return { verdict: "unclear" };
+  }
+}
+
+export async function askMentor(context, question) {
+  const provider = (process.env.LLM_PROVIDER || "none").toLowerCase();
+  const transcript = context
+    .map((m) => `${m.name}: ${m.text}`)
+    .join("\n")
+    .slice(-4000);
+
+  const userPrompt = `Recent room conversation:\n${transcript || "(no prior messages)"}\n\nNew question to answer:\n${question}`;
+
+  try {
+    if (provider === "openai") return await callOpenAI(userPrompt);
+    if (provider === "groq") return await callGroq(userPrompt);
+    if (provider === "anthropic") return await callAnthropic(userPrompt);
+    if (provider === "gemini") return await callGemini(userPrompt);
+    if (provider === "ollama") return await callOllama(userPrompt);
+  } catch (e) {
+    console.error("[llm] provider error, using fallback:", e.message);
+  }
+  return fallbackAnswer(question);
+}
+
+async function callOpenAI(userPrompt) {
+  const base = process.env.LLM_BASE_URL || "https://api.openai.com/v1";
+  const model = process.env.LLM_MODEL || "gpt-4o-mini";
+  const res = await fetch(`${base}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${process.env.LLM_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 300,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: userPrompt },
+      ],
+    }),
+  });
+  const data = await res.json();
+  return data?.choices?.[0]?.message?.content || fallbackAnswer(userPrompt);
+}
+
+// Groq exposes an OpenAI-compatible endpoint (https://api.groq.com/openai/v1).
+async function callGroq(userPrompt) {
+  const base = process.env.LLM_BASE_URL || "https://api.groq.com/openai/v1";
+  const model = process.env.LLM_MODEL || "openai/gpt-oss-20b";
+  const res = await fetch(`${base}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${process.env.LLM_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 300,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: userPrompt },
+      ],
+    }),
+  });
+  const data = await res.json();
+  if (data?.error) throw new Error(data.error.message || "groq error");
+  return data?.choices?.[0]?.message?.content || fallbackAnswer(userPrompt);
+}
+
+async function callAnthropic(userPrompt) {
+  const model = process.env.LLM_MODEL || "claude-3-5-haiku-latest";
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": process.env.LLM_API_KEY,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 300,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: "user", content: userPrompt }],
+    }),
+  });
+  const data = await res.json();
+  return data?.content?.[0]?.text || fallbackAnswer(userPrompt);
+}
+
+async function callGemini(userPrompt) {
+  const model = process.env.LLM_MODEL || "gemini-1.5-flash";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.LLM_API_KEY}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+      generationConfig: { maxOutputTokens: 300 },
+    }),
+  });
+  const data = await res.json();
+  return data?.candidates?.[0]?.content?.parts?.[0]?.text || fallbackAnswer(userPrompt);
+}
+
+async function callOllama(userPrompt) {
+  const base = process.env.LLM_BASE_URL || "http://localhost:11434";
+  const model = process.env.LLM_MODEL || "llama3.2";
+  const res = await fetch(`${base}/api/chat`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model,
+      stream: false,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: userPrompt },
+      ],
+    }),
+  });
+  const data = await res.json();
+  return data?.message?.content || fallbackAnswer(userPrompt);
+}
+
+// Deterministic, useful-sounding reply when no LLM is wired up.
+function fallbackAnswer(question) {
+  const q = (question || "").trim();
+  const topic = q.replace(/^@mentor\s*/i, "").replace(/\s*\?+\s*$/, "").trim();
+  return (
+    `Great question about “${topic || "this topic"}”. Here's the quick version:\n` +
+    `• Break it into the core idea, then a tiny example.\n` +
+    `• Try it yourself first, then compare with the docs.\n` +
+    `(Tip for the demo: set LLM_PROVIDER + LLM_API_KEY in bot/.env to get real AI answers.)`
+  );
+}
+
+// Recap generation reuses the same providers but with a structured prompt.
+export async function generateRecap(context) {
+  const transcript = context.map((m) => `${m.name}: ${m.text}`).join("\n").slice(-6000);
+  const prompt = `Summarize this study-room session as JSON with keys: summary (1-2 sentences), topics (array of short strings), openQuestions (array of strings). Conversation:\n${transcript}`;
+  const provider = (process.env.LLM_PROVIDER || "none").toLowerCase();
+  if (provider !== "none") {
+    try {
+      const raw = await askRaw(prompt);
+      const json = extractJson(raw);
+      if (json) return normalizeRecap(json, transcript);
+    } catch (e) {
+      console.error("[recap] llm error, using heuristic:", e.message);
+    }
+  }
+  return heuristicRecap(context);
+}
+
+async function askRaw(prompt) {
+  // OpenAI-compatible providers (openai, groq) share this shape.
+  if (providerSupportsRaw()) {
+    const base =
+      process.env.LLM_BASE_URL ||
+      (providerIsGroq() ? "https://api.groq.com/openai/v1" : "https://api.openai.com/v1");
+    const model = process.env.LLM_MODEL || (providerIsGroq() ? "openai/gpt-oss-20b" : "gpt-4o-mini");
+    const res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${process.env.LLM_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 400,
+        messages: [
+          { role: "system", content: "You output strict JSON only." },
+          { role: "user", content: prompt },
+        ],
+      }),
+    });
+    const data = await res.json();
+    return data?.choices?.[0]?.message?.content;
+  }
+  throw new Error("no raw provider");
+}
+
+function providerIsGroq() {
+  return (process.env.LLM_PROVIDER || "none").toLowerCase() === "groq";
+}
+
+function providerSupportsRaw() {
+  const p = (process.env.LLM_PROVIDER || "none").toLowerCase();
+  return (p === "openai" || p === "groq") && Boolean(process.env.LLM_API_KEY);
+}
+
+function extractJson(text) {
+  if (!text) return null;
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  try {
+    return JSON.parse(m[0]);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeRecap(json, transcript) {
+  return {
+    summary: json.summary || "A productive study session.",
+    topics: Array.isArray(json.topics) ? json.topics.slice(0, 6) : [],
+    openQuestions: Array.isArray(json.openQuestions) ? json.openQuestions.slice(0, 5) : [],
+    transcript,
+  };
+}
+
+// No-LLM recap: count messages, list question lines as open questions.
+function heuristicRecap(context) {
+  const humans = context.filter((m) => m.uid !== process.env.COMETCHAT_BOT_UID && m.uid !== "mentor_bot");
+  const questions = humans.filter((m) => m.text.includes("?")).map((m) => m.text.replace(/^@mentor\s*/i, "").trim());
+  const speakers = [...new Set(humans.map((m) => m.name))];
+  return {
+    summary:
+      humans.length === 0
+        ? "A short session — not much was discussed yet."
+        : `This session had ${humans.length} message${humans.length === 1 ? "" : "s"} from ${speakers.join(", ") || "the room"}.`,
+    topics: [...new Set(questions.map((q) => q.split(/\s+/).slice(0, 4).join(" ")))].slice(0, 6),
+    openQuestions: questions.slice(-5),
+    transcript: humans.map((m) => `${m.name}: ${m.text}`).join("\n").slice(-6000),
+  };
+}

@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build output
+dist/
+**/dist/
+build/
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+**/.env
+!**/.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+# CometChat credentials — contains your Auth Key; never commit
+.cometchat/config.json
+# Throwaway preview screenshots
+_preview_*.png

@@ -1,0 +1,337 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ------------------------------------------------------------------ *
+ * Design tokens (CSS custom properties — straight from the brief)
+ * vibrant · soft · flat (no shadows) · 4px grid · pill + 16px rhythm
+ * ------------------------------------------------------------------ */
+:root {
+  color-scheme: light;
+
+  --background: #ffffff; /* surface */
+  --elevated: #f2f2f2; /* subtle raised fill */
+  --foreground: #000000; /* text */
+  --muted: #6b6b6b; /* secondary text */
+
+  --primary: #0100f8;
+  --primary-dark: #0100c6; /* hover */
+  --primary-deeper: #01009e; /* active */
+  --primary-soft: #e9e9ff;
+  --primary-tint: #f4f4ff;
+
+  /* RGB channel forms — let Tailwind opacity modifiers (border-primary/30,
+     text-ink/70) work while the theme can still flip via .dark below. */
+  --primary-rgb: 1 0 248;
+  --ink-rgb: 0 0 0;
+
+  --border: rgba(0, 0, 0, 0.1); /* input / card hairline */
+  --border-strong: rgba(0, 0, 0, 0.22); /* hover border token */
+  --hover: rgba(0, 0, 0, 0.05); /* neutral hover fill token */
+  --hover-strong: rgba(0, 0, 0, 0.09); /* pressed/active fill token */
+
+  /* Focus ring — same token shape as the system spec, on-palette blue */
+  --focus-ring: rgba(1, 0, 248, 0.45);
+
+  /* Error (inferred — the palette ships none; a deep red that sits with blue) */
+  --danger: #c00000;
+  --danger-soft: #fdecec;
+  --danger-text: #5c0000;
+
+  /* Quiet chrome */
+  --scrollbar: #d3d3d3;
+
+  /* Rhythm */
+  --radius-card: 16px;
+  --radius-input: 6px;
+  --space: 0.25rem; /* 4px grid */
+  --duration: 0.3s;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Dark theme — same token names, flipped values. The primary lightens so it
+   keeps contrast on near-black surfaces; everything else follows the tokens. */
+html.dark {
+  color-scheme: dark;
+
+  --background: #0b0b11;
+  --elevated: #18181f;
+  --foreground: #ffffff;
+  --muted: #a2a2ad;
+
+  --primary: #6d6dff;
+  --primary-dark: #8383ff; /* hover lifts in dark */
+  --primary-deeper: #4a4ae6; /* active */
+  --primary-soft: #1c1c3a;
+  --primary-tint: #14142a;
+
+  --primary-rgb: 109 109 255;
+  --ink-rgb: 255 255 255;
+
+  --border: rgba(255, 255, 255, 0.14);
+  --border-strong: rgba(255, 255, 255, 0.3);
+  --hover: rgba(255, 255, 255, 0.07);
+  --hover-strong: rgba(255, 255, 255, 0.13);
+
+  --focus-ring: rgba(140, 140, 255, 0.6);
+
+  --danger: #ff8080;
+  --danger-soft: rgba(255, 90, 90, 0.13);
+  --danger-text: #ffd9d9;
+
+  --scrollbar: #3a3a46;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+}
+
+body {
+  font-family: Geist, "Geist Fallback", ui-sans-serif, system-ui, sans-serif;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 16px; /* body base from the brief */
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Focus-visible — required on every interactive element (WCAG 2.2 AA).
+   Never suppressed; pointer users get no ring, keyboard users always do. */
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Respect reduced-motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Scrollbars — quiet, on-palette */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 9999px;
+}
+
+@layer components {
+  /* Buttons — pill, flat (no shadows), 500 weight, 8px 12px, 0.3s.
+     Full state vocabulary: default / hover / focus-visible / active /
+     disabled / loading (aria-busy) / error (aria-invalid). */
+  .btn {
+    @apply inline-flex min-h-[40px] items-center justify-center gap-2 rounded-pill px-3 py-2 text-sm font-medium;
+    transition: background-color var(--duration) var(--ease), color var(--duration) var(--ease),
+      border-color var(--duration) var(--ease);
+  }
+  .btn-primary {
+    @apply btn bg-primary text-white;
+  }
+  .btn-primary:hover {
+    background: var(--primary-dark);
+  }
+  .btn-primary:active {
+    background: var(--primary-deeper);
+  }
+  .btn-secondary {
+    @apply btn border bg-surface text-ink;
+    border-color: var(--border);
+  }
+  .btn-secondary:hover {
+    background: var(--primary-tint);
+    border-color: var(--border-strong);
+  }
+  .btn-secondary:active {
+    background: var(--primary-soft);
+  }
+  .btn-ghost {
+    @apply btn text-ink;
+    background: transparent;
+  }
+  .btn-ghost:hover {
+    background: var(--hover);
+  }
+  .btn-ghost:active {
+    background: var(--hover-strong);
+  }
+  .btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  /* Loading state — set aria-busy="true"; keeps layout stable, no clicks */
+  .btn[aria-busy="true"] {
+    cursor: progress;
+    pointer-events: none;
+    opacity: 0.8;
+  }
+  /* Error state hook */
+  .btn[aria-invalid="true"] {
+    border-color: var(--danger);
+    box-shadow: 0 0 0 3px rgba(192, 0, 0, 0.18);
+  }
+
+  /* Cards — white surface, 16px radius, 1px hairline, flat.
+     Padding default 12px per the brief; components may extend it. */
+  .card {
+    @apply rounded-card;
+    background: var(--background);
+    border: 1px solid var(--border);
+  }
+  /* Interactive card (room list items etc.) — full state set */
+  .card-interactive {
+    @apply card cursor-pointer text-left;
+    transition: background-color var(--duration) var(--ease),
+      border-color var(--duration) var(--ease);
+  }
+  .card-interactive:hover {
+    background: var(--primary-tint);
+    border-color: var(--border-strong);
+  }
+  .card-interactive:active {
+    background: var(--primary-soft);
+  }
+  .card-interactive[aria-current="true"],
+  .card-interactive[aria-selected="true"] {
+    border-color: var(--primary);
+    background: var(--primary-soft);
+  }
+
+  /* Chips — pill tags on the elevated fill */
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-pill px-3 py-1 text-xs font-medium;
+    background: var(--elevated);
+    color: var(--muted);
+  }
+
+  /* Inputs — white bg, 1px subtle border, 6px radius, 8px 12px padding.
+     States: default / hover / focus-visible / disabled / error (aria-invalid). */
+  .input {
+    @apply w-full rounded-input bg-surface px-3 py-2 text-body text-ink outline-none;
+    border: 1px solid var(--border);
+    transition: border-color var(--duration) var(--ease),
+      box-shadow var(--duration) var(--ease);
+  }
+  .input::placeholder {
+    color: var(--muted);
+  }
+  .input:hover:not(:disabled):not(:focus) {
+    border-color: var(--border-strong);
+  }
+  .input:focus-visible {
+    outline: none; /* replaced by the ring below — never both */
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px var(--focus-ring);
+  }
+  .input:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    background: var(--elevated);
+  }
+  .input[aria-invalid="true"] {
+    border-color: var(--danger);
+    box-shadow: 0 0 0 3px rgba(192, 0, 0, 0.15);
+  }
+
+  /* Headings — type scale from the brief (60 / 48 / 48 / 16) */
+  .h1 {
+    @apply text-h1;
+  }
+  .h2 {
+    @apply text-h2;
+  }
+  .h3 {
+    @apply text-h3;
+  }
+  .h4 {
+    @apply text-h4;
+  }
+  /* Responsive headline step-down (no one-off sizes in components) */
+  @media (max-width: 640px) {
+    .h1 {
+      font-size: 36px;
+    }
+    .h2,
+    .h3 {
+      font-size: 30px;
+    }
+  }
+
+  /* Soft sky wash for hero / empty surfaces — airy light blue like a clear
+     sky (inferred from the reference's atmosphere, original gradient). */
+  .sky {
+    background:
+      radial-gradient(70% 45% at 50% 0%, rgba(1, 0, 248, 0.1), transparent 70%),
+      linear-gradient(180deg, #dbe7ff 0%, #eef4ff 45%, var(--background) 100%);
+  }
+  /* Dark variant — the same airy wash, rendered as a night-sky glow. */
+  html.dark .sky {
+    background:
+      radial-gradient(70% 45% at 50% 0%, rgba(109, 109, 255, 0.18), transparent 70%),
+      linear-gradient(180deg, #10142e 0%, #0c0e1e 45%, var(--background) 100%);
+  }
+
+  /* Skip link — visually hidden until keyboard-focused (WCAG 2.4.1) */
+  .skip-link {
+    @apply sr-only;
+  }
+  .skip-link:focus-visible {
+    @apply not-sr-only fixed z-nav rounded-pill bg-primary px-4 py-2 text-sm font-medium text-white;
+    top: 12px;
+    left: 12px;
+  }
+
+  /* Error callout (login failures, moderation warnings) */
+  .callout-error {
+    @apply rounded-card border p-3 text-sm;
+    background: var(--danger-soft);
+    border-color: rgba(192, 0, 0, 0.35);
+    color: var(--danger-text);
+  }
+}
+
+/* Typing dots animation */
+.typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: currentColor;
+  opacity: 0.4;
+  animation: typing 1.2s infinite ease-in-out;
+}
+.typing-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.typing-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes typing {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
