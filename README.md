@@ -14,8 +14,6 @@ Built for the CometChat **#ZeroToChat** challenge.
 
 ---
 
-## 🚀 Startup (exact, step by step)
-
 ### 0. Prerequisites
 - **Node.js ≥ 18** (`node -v` to check; verified on Node 24).
 - A free **CometChat app** at [app.cometchat.com](https://app.cometchat.com)
