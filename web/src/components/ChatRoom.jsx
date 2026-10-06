@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   fetchMessages,
+  fetchMessagesSince,
   addMessageListener,
   sendRecapRequest,
 } from "../lib/cometchat.js";
@@ -19,6 +20,7 @@ export default function ChatRoom({ group, cohort, currentUser, mentorOnline }) {
   const [mentorTyping, setMentorTyping] = useState(false);
   const [ending, setEnding] = useState(false);
   const bottomRef = useRef(null);
+  const cursorRef = useRef(0); // newest sentAt (s) seen — REST poll watermark
   const myUid = currentUser.getUid ? currentUser.getUid() : currentUser.uid;
 
   // Load history.
@@ -36,6 +38,9 @@ export default function ChatRoom({ group, cohort, currentUser, mentorOnline }) {
           .filter((m) => m.isRecap || (m.text || "").trim())
           .sort((a, b) => a.sentAt - b.sentAt);
         setMessages(norm);
+        cursorRef.current = norm.length
+          ? Math.max(...norm.map((m) => m.sentAt))
+          : Math.floor(Date.now() / 1000);
       } catch (e) {
         console.error("history", e);
       } finally {
@@ -51,11 +56,61 @@ export default function ChatRoom({ group, cohort, currentUser, mentorOnline }) {
   // for the sender's own messages (CometChat does not echo your own group
   // messages back through the listener — they must be appended optimistically,
   // or the sender sees nothing after pressing Send).
-  function appendMessage(msg) {
-    const norm = normalizeMessage(msg);
+  function appendMessage(normOrMsg) {
+    const norm = normOrMsg.raw !== undefined || normOrMsg.senderUid !== undefined
+      ? normOrMsg // already normalized
+      : normalizeMessage(normOrMsg);
     if (!norm.isRecap && !(norm.text || "").trim()) return; // ignore empty/system
-    setMessages((m) => (m.some((x) => x.id === norm.id) ? m : [...m, norm]));
+    setMessages((m) =>
+      m.some(
+        // Dedupe by id, and defensively by content+sender within 2s — WS and
+        // REST paths can hand different id formats for the same message.
+        (x) =>
+          x.id === norm.id ||
+          (x.text &&
+            x.text === norm.text &&
+            x.senderUid === norm.senderUid &&
+            Math.abs(x.sentAt - norm.sentAt) <= 2)
+      )
+        ? m
+        : [...m, norm].sort((a, b) => a.sentAt - b.sentAt)
+    );
+    if (norm.sentAt > cursorRef.current) cursorRef.current = norm.sentAt;
   }
+
+  // REST poll fallback for live delivery: since the 2026-10-05 CometChat
+  // platform deploy, WebSocket message push to clients is unreliable, so the
+  // room also pulls anything newer than the watermark every few seconds.
+  // appendMessage() dedupes against anything the WS did deliver.
+  useEffect(() => {
+    let active = true;
+    const timer = setInterval(async () => {
+      // NOTE: no document.hidden guard — background tabs/windows are exactly
+      // where a kicked or stalled WebSocket hurts most, and the poll is the
+      // safety net for it. Cost is one small GET every few seconds.
+      if (loading || !active) return;
+      try {
+        const list = await fetchMessagesSince(guid, Math.max(1, cursorRef.current - 2));
+        if (!active || !list?.length) return;
+        for (const m of list.sort((a, b) => a.sentAt - b.sentAt)) {
+          const norm = normalizeMessage(m);
+          if (norm.receiverId && typeof norm.receiverId === "object") {
+            if ((norm.receiverId.guid || "") !== guid) continue;
+          }
+          appendMessage(norm);
+          const rid = typeof norm.receiverId === "string" ? norm.receiverId : norm.receiverId?.guid;
+          if (rid === guid && norm.senderUid === config.mentorUid && !norm.isRecap)
+            setMentorTyping(false);
+        }
+      } catch {
+        /* transient — next tick retries */
+      }
+    }, 4000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [guid, loading]);
 
   // Live messages + typing for this room.
   useEffect(() => {

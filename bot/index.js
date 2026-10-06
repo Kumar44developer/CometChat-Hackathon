@@ -91,59 +91,122 @@ async function main() {
   CometChat.addMessageListener(
     "mentorroom_bot",
     new CometChat.MessageListener({
-      onTextMessageReceived: async (message) => {
-        try {
-          const id = pick(message, "getMessageId", "messageId");
-          if (id && processed.has(id)) return;
-          if (id) {
-            processed.add(id);
-            if (processed.size > 1000) processed.delete(processed.values().next().value); // keep bounded
-          }
-          const sender = pick(message, "getSender", "sender");
-          const senderUid = pick(sender, "getUid", "uid");
-          if (senderUid === BOT_UID) return; // never answer itself
-          const receiverType = pick(message, "getReceiverType", "receiverType");
-          if (receiverType !== CometChat.RECEIVER_TYPE.GROUP) return;
-          const receiver = pick(message, "getReceiver", "receiver");
-          const guid = typeof receiver === "string" ? receiver : pick(receiver, "getGuid", "guid");
-          const text = pick(message, "getText", "text") || "";
-
-          const name = pick(sender, "getName", "name") || senderUid || "someone";
-          remember({ guid, uid: senderUid, name, text });
-
-          if (text.trim().toLowerCase() === "/recap") {
-            await postRecap(CometChat, guid);
-            return;
-          }
-          if (shouldAnswer(text)) {
-            await answer(CometChat, guid, text);
-          }
-        } catch (e) {
-          console.error("[mentor] text handler error:", e.message || e);
-        }
-      },
-      onCustomMessageReceived: async (message) => {
-        try {
-          // This SDK exposes the custom type via getType()/getSubType() (there is
-          // no getCustomType). Try all so recap_request is reliably detected.
-          const type =
-            pick(message, "getType", "type") ||
-            pick(message, "getSubType", "subType") ||
-            pick(message, "getCustomType", "customType");
-          if (type === "recap_request") {
-            const receiver = pick(message, "getReceiver", "receiver");
-            const guid = typeof receiver === "string" ? receiver : pick(receiver, "getGuid", "guid");
-            await postRecap(CometChat, guid);
-          }
-        } catch (e) {
-          console.error("[mentor] custom handler error:", e.message || e);
-        }
-      },
+      onTextMessageReceived: (message) => handleText(CometChat, message).catch((e) =>
+        console.error("[mentor] text handler error:", e.message || e)
+      ),
+      onCustomMessageReceived: (message) => handleCustom(CometChat, message).catch((e) =>
+        console.error("[mentor] custom handler error:", e.message || e)
+      ),
     })
   );
 
   console.log("[mentor] listening. The mentor replies to every message in the room.");
+  // Safety net: since the 2026-10-05 platform deploy, WebSocket push does not
+  // deliver group messages to non-browser (Node/jsdom) sessions, while REST
+  // reads still work. Poll each room for anything the socket missed; the
+  // shared `processed` id-set keeps the two paths from ever double-answering.
+  startPoller(CometChat);
   startHttpServer(CometChat);
+}
+
+// Core per-message logic, shared by the WS listener and the REST poller.
+// WS hands us SDK class instances (getters); the poller hands us light
+// wrappers with plain fields (`type` not `messageType`, `id` not `messageId`),
+// so every read goes through pick() with both key variants.
+async function handleText(CometChat, message) {
+  const id =
+    pick(message, "getMessageId", "messageId") || pick(message, "getId", "id");
+  if (id && processed.has(id)) return;
+  if (id) {
+    processed.add(id);
+    if (processed.size > 1000) processed.delete(processed.values().next().value); // keep bounded
+  }
+  const sender = pick(message, "getSender", "sender");
+  const senderUid = pick(sender, "getUid", "uid");
+  if (senderUid === BOT_UID) return; // never answer itself
+  const receiverType = pick(message, "getReceiverType", "receiverType");
+  if (receiverType !== CometChat.RECEIVER_TYPE.GROUP && receiverType !== "group") return;
+  const receiver = pick(message, "getReceiver", "receiver");
+  const guid = typeof receiver === "string" ? receiver : pick(receiver, "getGuid", "guid");
+  const text = pick(message, "getText", "text") || "";
+
+  const name = pick(sender, "getName", "name") || senderUid || "someone";
+  remember({ guid, uid: senderUid, name, text });
+
+  if (text.trim().toLowerCase() === "/recap") {
+    await postRecap(CometChat, guid);
+    return;
+  }
+  if (shouldAnswer(text)) {
+    await answer(CometChat, guid, text);
+  }
+}
+
+async function handleCustom(CometChat, message) {
+  const id =
+    pick(message, "getMessageId", "messageId") || pick(message, "getId", "id");
+  if (id && processed.has(id)) return; // WS + poller must not double-recap
+  if (id) {
+    processed.add(id);
+    if (processed.size > 1000) processed.delete(processed.values().next().value);
+  }
+  // WS hands us SDK CustomMessage instances whose getType()/getSubType()
+  // return the custom type; REST-polled wrappers carry the custom type in
+  // `type` as well (with `category: "custom"`). Check every candidate so
+  // recap_request is detected on both transports.
+  const candidates = [
+    pick(message, "getType", "type"),
+    pick(message, "getSubType", "subType"),
+    pick(message, "getCustomType", "customType"),
+    pick(message, "getTemplateKey", "templateKey"),
+  ];
+  if (!candidates.includes("recap_request")) return;
+  const receiver = pick(message, "getReceiver", "receiver");
+  const guid = typeof receiver === "string" ? receiver : pick(receiver, "getGuid", "guid");
+  await postRecap(CometChat, guid);
+}
+
+// REST fallback: every few seconds, fetch messages newer than the last seen
+// sentAt for each group the mentor belongs to and feed them through the same
+// handlers as the live listener.
+function startPoller(CometChat) {
+  const rooms = new Map(); // guid -> last seen sentAt (seconds)
+  let tick = 0;
+  const refreshRooms = async () => {
+    const groups = await new CometChat.GroupsRequestBuilder().setLimit(50).build().fetchNext();
+    for (const g of groups) {
+      const guid = pick(g, "getGuid", "guid");
+      if (guid && !rooms.has(guid)) rooms.set(guid, Math.floor(Date.now() / 1000));
+    }
+  };
+  setInterval(async () => {
+    try {
+      if (tick++ % 15 === 0) await refreshRooms(); // ~every 90s
+      for (const [guid, since] of rooms) {
+        const msgs = await new CometChat.MessagesRequestBuilder()
+          .setGUID(guid)
+          .setLimit(20)
+          .setTimestamp(since)
+          .build()
+          .fetchNext();
+        for (const m of msgs || []) {
+          const ts = Number(pick(m, "getSentAt", "sentAt")) || 0;
+          if (ts > rooms.get(guid)) rooms.set(guid, ts);
+          // Polled wrappers expose the custom type as `type` for custom
+          // messages ("recap_request"), so route on `category` first.
+          const category = pick(m, "getCategory", "category");
+          const type =
+            pick(m, "getMessageType", "messageType") || pick(m, "getType", "type");
+          if (category === "custom" || type === "recap_request")
+            await handleCustom(CometChat, m);
+          else if (type === "text") await handleText(CometChat, m);
+        }
+      }
+    } catch (e) {
+      console.warn("[mentor] poll tick failed (will retry):", e?.message || e);
+    }
+  }, 6000);
+  refreshRooms().catch(() => {});
 }
 
 // Type -> think -> send, all as the mentor user.
@@ -155,7 +218,15 @@ async function answer(CometChat, guid, question) {
     const reply = await askMentor(context, question);
     const msg = new CometChat.TextMessage(guid, reply, CometChat.RECEIVER_TYPE.GROUP);
     // NOTE: CometChat metadata values must be JSON objects, not booleans.
-    await CometChat.sendMessage(msg);
+    try {
+      await CometChat.sendMessage(msg);
+    } catch (e) {
+      // A transient POST failure must not swallow the answer — wait a beat
+      // and retry once before giving up (observed live during demos).
+      console.warn("[mentor] sendMessage failed, retrying once:", e.message || e);
+      await new Promise((r) => setTimeout(r, 1500));
+      await CometChat.sendMessage(msg);
+    }
     remember({ guid, uid: BOT_UID, name: "Mentor AI", text: reply });
   } catch (e) {
     console.error("[mentor] answer error:", e.message);
@@ -199,7 +270,13 @@ async function postRecap(CometChat, guid) {
         openQuestions: recap.openQuestions || [],
       },
     });
-    await CometChat.sendMessage(msg);
+    try {
+      await CometChat.sendMessage(msg);
+    } catch (e) {
+      console.warn("[mentor] recap send failed, retrying once:", e.message || e);
+      await new Promise((r) => setTimeout(r, 1500));
+      await CometChat.sendMessage(msg);
+    }
     remember({ guid, uid: BOT_UID, name: "Mentor AI", text: body });
   } catch (e) {
     console.error("[mentor] recap error:", e.message || e);

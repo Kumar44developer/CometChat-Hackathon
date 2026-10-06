@@ -16,7 +16,11 @@ export function normalizeMessage(msg) {
   const sender = call(msg, "getSender", null);
   const senderUser = typeof sender?.getUid === "function" || sender?.uid ? sender : null;
   return {
-    id: call(msg, "getMessageId", Math.random().toString(36)),
+    // WS-delivered messages expose getMessageId(); REST-polled wrappers carry
+    // a plain `id`. Read both so the same message can never render twice.
+    id:
+      call(msg, "getMessageId", undefined) ??
+      call(msg, "getId", Math.random().toString(36)),
     raw: msg,
     type: call(msg, "getType", "message"),
     category: call(msg, "getCategory", "message"),

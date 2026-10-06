@@ -109,6 +109,9 @@ async function callOpenAI(userPrompt) {
       "content-type": "application/json",
       authorization: `Bearer ${process.env.LLM_API_KEY}`,
     },
+    // Hard timeout: a stalled socket must never silence the mentor —
+    // askMentor turns this into an immediate fallback answer instead.
+    signal: AbortSignal.timeout(20000),
     body: JSON.stringify({
       model,
       max_tokens: 300,
@@ -132,6 +135,7 @@ async function callGroq(userPrompt) {
       "content-type": "application/json",
       authorization: `Bearer ${process.env.LLM_API_KEY}`,
     },
+    signal: AbortSignal.timeout(20000),
     body: JSON.stringify({
       model,
       max_tokens: 300,
@@ -155,6 +159,7 @@ async function callAnthropic(userPrompt) {
       "x-api-key": process.env.LLM_API_KEY,
       "anthropic-version": "2023-06-01",
     },
+    signal: AbortSignal.timeout(20000),
     body: JSON.stringify({
       model,
       max_tokens: 300,
@@ -172,6 +177,7 @@ async function callGemini(userPrompt) {
   const res = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
+    signal: AbortSignal.timeout(20000),
     body: JSON.stringify({
       system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
       contents: [{ role: "user", parts: [{ text: userPrompt }] }],
@@ -188,6 +194,7 @@ async function callOllama(userPrompt) {
   const res = await fetch(`${base}/api/chat`, {
     method: "POST",
     headers: { "content-type": "application/json" },
+    signal: AbortSignal.timeout(30000),
     body: JSON.stringify({
       model,
       stream: false,
@@ -243,6 +250,7 @@ async function askRaw(prompt) {
         "content-type": "application/json",
         authorization: `Bearer ${process.env.LLM_API_KEY}`,
       },
+      signal: AbortSignal.timeout(30000),
       body: JSON.stringify({
         model,
         max_tokens: 400,

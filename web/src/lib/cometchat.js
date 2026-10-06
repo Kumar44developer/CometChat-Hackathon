@@ -80,6 +80,18 @@ export async function fetchMessages(guid, limit = 30) {
   return request.fetchPrevious();
 }
 
+// Messages newer than `since` (unix seconds) for a room, via REST. Used as a
+// live-delivery fallback: since the 2026-10-05 platform deploy, WebSocket
+// push of group messages to clients is unreliable, so the UI polls this.
+export async function fetchMessagesSince(guid, since, limit = 30) {
+  const request = new CometChat.MessagesRequestBuilder()
+    .setGUID(guid)
+    .setLimit(limit)
+    .setTimestamp(since)
+    .build();
+  return request.fetchNext();
+}
+
 export function buildTextMessage(guid, text, { category, metadata } = {}) {
   const message = new CometChat.TextMessage(
     guid,
