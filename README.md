@@ -117,7 +117,7 @@ per tenant.
 
 ---
 
-## ⚠️ Startup gotchas (learned the hard way)
+## ⚠️gotchas (learned the hard way)
 
 | Gotcha | Why / fix |
 | --- | --- |
