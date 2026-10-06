@@ -190,21 +190,6 @@ mentorroom/
 
 ---
 
-## 🎬 Demo flow (what to show)
-
-1. Open the app, log in as **student1**; open an incognito window as **student2**.
-2. Pick a **cohort** from the dropdown → the room list filters (multi-tenant).
-3. In a room, ask: `@mentor in two sentences, what is a binary tree?` →
-   watch **“Mentor AI is thinking…”** (real typing) → real answer with an
-   **✦ AI mentor** badge.
-4. In student2's window, send a toxic message → **blocked inline**
-   (“Message blocked by room moderation — Flagged by AI moderator …”), including
-   sentences with no keyword that only the AI catches; then `kill yourself` for
-   the instant keyword block.
-5. Click **⏹ End session** → the mentor posts a **recap card** (~5 s).
-6. Hit the **🌙 theme toggle** → whole app flips to dark (one token layer).
-7. Show the CometChat dashboard (users/groups) + the bot listener code.
-
 ---
 
 ## Commands
